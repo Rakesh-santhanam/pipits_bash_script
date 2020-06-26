@@ -1,0 +1,69 @@
+#!/bin/bash
+
+## working dir home
+
+mkdir -p 1-raw_from_dloss_3-resistome/fastqc
+
+## fastqc ####
+
+fastqc ~/*.fq.gz -t 30 -o 1-raw_from_3-resistome/fastqc/
+
+multiqc ~/ -o 1-raw_from_dloss_3-resistome/
+
+##### PIPITS ####
+mkdir -p 2-pipits/1-prep
+
+source activate pipits_env
+
+export its_db="~/db/its"
+export PIPITS_UNITE_RETRAINED_DIR=$its_db/unite/UNITE_retrained_28062017
+export PIPITS_UNITE_REFERENCE_DATA_CHIMERA=$its_db/uchime/uchime_reference_dataset_28.06.2017/uchime_reference_dataset_28.06.2017.fasta
+export PIPITS_WARCUP_RETRAINED_DIR=$its_db/warcup/warcup_retrained_V2
+
+
+pispino_createreadpairslist -i 1-raw_from_3-resistome/ -o 2-pipits/readpairslist.txt 
+
+cat meta/samples.txt | xargs -i echo -e {} 1-raw_from_3-resistome/{}_1.raw.fq.gz 1-raw_from_3-resistome/{}_2.raw.fq.gz | sed s/" "/"\t"/g >> 2-pipits/readpairslist.txt
+
+pispino_seqprep -r -i . -o 2-pipits/1-prep -l 2-pipits/readpairslist.txt -t 60 --joiner_method PEAR
+
+### bove four steps takes 4 hours to complete
+
+### individual sample reads after pispino_seqprep (quality control and joined )
+## less prepped.fasta | grep ">" | cut -d '_' -f 1|uniq -c > sample_reads_after_pispino_seqprep.txt
+
+## extract ITS sequences 
+mkdir -p 2-pipits/2-funits/ITS2
+nice -n 4 pipits_funits -r -i 2-pipits/1-prep/prepped.fasta -o 2-pipits/2-funits/ITS2 -x ITS2 -t 60
+
+# pipits_funits takes 8 hours to complete
+
+
+### setting parameters for files ####
+export its_db="~/db/its"
+export PIPITS_UNITE_RETRAINED_DIR=$its_db/unite/UNITE_retrained_01122017
+export PIPITS_UNITE_REFERENCE_DATA_CHIMERA=$its_db/uchime/uchime_reference_dataset_28.06.2017/uchime_reference_dataset_28.06.2017.fasta
+export PIPITS_WARCUP_RETRAINED_DIR=$its_db/warcup/warcup_retrained_V2
+
+##
+nice -n 4 pipits_process -r -i 2-pipits/2-funits/ITS2/ITS.fasta -o 2-pipits/3-process/ITS2/unite -t 60
+### pipits_process not working nice -n 4 pipits_process -r -i 2-pipits/2-funits/ITS2/ITS.fasta -o 2-pipits/3-process/ITS2/unite -t 60
+
+source deactivate pipits_env
+
+
+source activate qiime1
+
+mkdir -p 3-qiime-its-tax/unite_97
+
+ref_seqs="~/db/its/unite/UNITE_retrained_28062017/sh_general_release_dynamic_s_28.06.2017.renamed.fn"
+ref_tax="~/db/its/unite/UNITE_retrained_28062017/sh_general_release_dynamic_s_28.06.2017.renamed.tax"
+otu_rep_seqs="2-pipits/3-process/ITS2/unite_97%/repseqs.fasta"
+
+assign_taxonomy.py -i $otu_rep_seqs -t $ref_tax -r $ref_seqs -m mothur -o 3-qiime-its-tax/unite_97/mothur
+
+biom summarize-table -i 2-pipits/3-process/ITS2/unite_97%/otu_table.biom
+
+single_rarefaction.py -i 2-pipits_pear/3-process/ITS2/unite/otu_table.biom -o 2-pipits_pear/3-process/ITS2/unite/otu_table_even1856.biom -d 18560
+
+alpha_diversity.py -i otu_table_even1856.biom -m simpson_e,shannon,chao1 -o alpha_diversity_sim_shaon_chao.txt
